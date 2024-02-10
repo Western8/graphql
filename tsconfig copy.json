@@ -10,6 +10,11 @@
     "esModuleInterop": true,
   },
   "include": [
-    "src/**/*.ts"
-  ]
+    "src/**/*.ts",
+    "prisma/**/*.ts", "src/routes/graphql/types/types.graphql",
+  ],
+  "ts-node": {
+    "esm": true,
+    "experimentalSpecifierResolution": "node",
+  }, 
 }
