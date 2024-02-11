@@ -37,7 +37,7 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
       },
     },
     async handler(req) {
-      console.log('зашли в handler graphql !!!!!!!')
+      //console.log('зашли в handler graphql !!!!!!!')
       //console.log('req.body.variables ', req.body.variables);      
       const result = graphql({
         schema,
@@ -47,35 +47,12 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
         contextValue: fastify,
         //typeResolver: typeResolvers,
       });
-      /*
-      const memberTypes = await prisma.memberType.findMany();
-      const posts = await prisma.post.findMany();
-      const users = await prisma.user.findMany();
-      const profiles = await prisma.profile.findMany();
-      const result = {
-        data: {
-          memberTypes,
-          posts,
-          users,
-          profiles,
-        }
-      }
-      */
       return result;
-      //return { data: 55555, example: 77777777 };
-
-      /*
-      const graphqlArgs = {
-        schema: req.body,
-        source: 'qqqqqqq',
-      }
-      return graphql(graphqlArgs);
-      */
     },
   });
 
 
-  //const UUID =UUIDType;
+  //const UUID = UUIDType;
 
   const resolvers = {
     memberTypes: async () => await prisma.memberType.findMany(),
@@ -101,41 +78,17 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
       const user = await prisma.user.findUnique({ where: { id: args.id } })
       if (user) {
         return await getUserData(user);
-        /*
-        const profile = await prisma.profile.findUnique({ where: { userId: result.id } });
-        console.log('1111111111 profile  ', profile);
-        
-        const posts = await prisma.post.findMany({ where: { authorId: result.id } });
-        return {
-          id: result.id,
-          name: result.name,
-          balance: result.balance,
-          profile,
-          posts,
-        }
-        */
       } else {
         return null;
       }
-      //return result || null
     },
     profile: async (args) => {
       const profile = await prisma.profile.findUnique({ where: { id: args.id } })
       if (profile) {
         return await getProfileData(profile);
-        /*
-        const memberType = await prisma.memberType.findUnique({ where: { id: result.memberTypeId } })
-        return {
-          id: result.id,
-          isMale: result.isMale,
-          yearOfBirth: result.yearOfBirth,
-          memberType,
-        }
-        */
       } else {
         return null;
       }
-      //return result || null
     },
   }
 
@@ -143,12 +96,41 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
     const posts = await prisma.post.findMany({ where: { authorId: user.id } });
     const profile = await prisma.profile.findUnique({ where: { userId: user.id } });
     const profileData = await getProfileData(profile);
+
+    const subs = await prisma.subscribersOnAuthors.findMany({ where: { subscriberId: user.id } })
+    const userSubscribedTo = subs.map(async (item) => {
+      const subTo = await prisma.user.findUnique({ where: { id: item.authorId } });
+      if (!subTo) return {};
+      const subsBack = await prisma.subscribersOnAuthors.findMany({ where: { authorId: subTo.id } })
+      const subscribedToUser = subsBack.map(itemSubBack => { return  { id: itemSubBack.subscriberId }} );
+      return {
+        id: subTo.id,
+        name: subTo.name,
+        subscribedToUser,
+      }
+    })
+
+    const subsBack = await prisma.subscribersOnAuthors.findMany({ where: { authorId: user.id } })
+    const subscribedToUser = subsBack.map(async (item) => {
+      const subBack = await prisma.user.findUnique({ where: { id: item.subscriberId } });
+      if (!subBack) return {};
+      const subsTo = await prisma.subscribersOnAuthors.findMany({ where: { subscriberId: subBack.id } })
+      const userSubscribedTo = subsTo.map(itemSubTo => { return  { id: itemSubTo.authorId }} );
+      return {
+        id: subBack.id,
+        name: subBack.name,
+        userSubscribedTo,
+      }
+    })
+
     return {
       id: user.id,
       name: user.name,
       balance: user.balance,
       profile: profileData,
       posts,
+      userSubscribedTo: userSubscribedTo,
+      subscribedToUser: subscribedToUser,
     }
   }
 
@@ -174,7 +156,6 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
 
 export default plugin;
 
-//userWithNullProfile(id: UUID!): UserProfile
 const schema = buildSchema(`
   type Query {
     memberTypes: [MemberType]
@@ -186,7 +167,6 @@ const schema = buildSchema(`
     post(id: UUID!): Post
     user(id: UUID!): UserProfile
     profile(id: UUID!): ProfileMemberType
-
   }
 
   type MemberType {
@@ -219,6 +199,8 @@ const schema = buildSchema(`
     balance: Float
     profile: ProfileMemberType
     posts: [Post]
+    userSubscribedTo: [UserSubscribedTo]
+    subscribedToUser: [SubscribedToUser]
   }
 
   type ProfileMemberType {
@@ -228,6 +210,18 @@ const schema = buildSchema(`
     memberType: MemberType
   }
 
+  type UserSubscribedTo {
+    id: UUID!
+    name: String
+    subscribedToUser: [SubscribedToUser]
+  }
+
+  type SubscribedToUser {
+    id: UUID!
+    name: String
+    userSubscribedTo: [UserSubscribedTo]
+  }
+
   enum MemberTypeId {
     basic
     business
@@ -235,5 +229,3 @@ const schema = buildSchema(`
 
   scalar UUID
 `);
-
-//schema.getType('UUID');
