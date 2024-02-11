@@ -1,31 +1,10 @@
 import { FastifyPluginAsyncTypebox } from '@fastify/type-provider-typebox';
 import { createGqlResponseSchema, gqlResponseSchema } from './schemas.js';
 import { buildSchema, graphql } from 'graphql';
-import { GraphQLID } from 'graphql';
-import { QueryDocumentKeys } from 'graphql/language/ast.js';
 import { UUIDType } from './types/uuid.js';
-
 
 const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
   const { prisma } = fastify;
-  /*
-  fastify.route({
-    url: '/',
-    method: 'POST',
-    schema: {
-      ...createGqlResponseSchema,
-      response: {
-        200: gqlResponseSchema,
-      },
-    },
-    async handler(req) {
-      console.log('зашли в /graphql!!!! ');
-      //return {};
-      return { data: 55555, exampre: 77777777 };
-    },
-  });
-*/
-
 
   fastify.route({
     url: '/',
@@ -38,7 +17,6 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
     },
     async handler(req) {
       //console.log('зашли в handler graphql !!!!!!!')
-      //console.log('req.body.variables ', req.body.variables);      
       const result = graphql({
         schema,
         source: req.body.query,
@@ -50,9 +28,6 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
       return result;
     },
   });
-
-
-  //const UUID = UUIDType;
 
   const resolvers = {
     memberTypes: async () => await prisma.memberType.findMany(),
@@ -97,14 +72,12 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
       });
       return user;
     },
-
     createPost: async (args) => {
       const post = await prisma.post.create({
         data: args.dto
       });
       return post;
     },
-
     createProfile: async (args) => {
       const profile = await prisma.profile.create({
         data: args.dto
@@ -147,6 +120,24 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
       return profile;
     },
 
+    subscribeTo: async (args) => {
+      const sub = await prisma.subscribersOnAuthors.create({
+        data: {
+          subscriberId: args.userId,
+          authorId: args.authorId,
+        }
+      });
+      return { id: args.authorId };
+    },
+    unsubscribeFrom: async (args) => {
+      await prisma.subscribersOnAuthors.deleteMany({
+        where: {
+          subscriberId: args.userId,
+          authorId: args.authorId,
+        }
+      });
+      return true;
+    },
   }
 
   const getUserData = async (user) => {
@@ -159,7 +150,7 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
       const subTo = await prisma.user.findUnique({ where: { id: item.authorId } });
       if (!subTo) return {};
       const subsBack = await prisma.subscribersOnAuthors.findMany({ where: { authorId: subTo.id } })
-      const subscribedToUser = subsBack.map(itemSubBack => { return  { id: itemSubBack.subscriberId }} );
+      const subscribedToUser = subsBack.map(itemSubBack => { return { id: itemSubBack.subscriberId } });
       return {
         id: subTo.id,
         name: subTo.name,
@@ -172,7 +163,7 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
       const subBack = await prisma.user.findUnique({ where: { id: item.subscriberId } });
       if (!subBack) return {};
       const subsTo = await prisma.subscribersOnAuthors.findMany({ where: { subscriberId: subBack.id } })
-      const userSubscribedTo = subsTo.map(itemSubTo => { return  { id: itemSubTo.authorId }} );
+      const userSubscribedTo = subsTo.map(itemSubTo => { return { id: itemSubTo.authorId } });
       return {
         id: subBack.id,
         name: subBack.name,
@@ -205,13 +196,12 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
     }
   }
 
+  //const UUID = UUIDType;
   //const typeResolvers = {
   //  UUID: UUIDType,
   //}
 
 };
-
-export default plugin;
 
 const schema = buildSchema(`
   type Query {
@@ -298,6 +288,9 @@ const schema = buildSchema(`
     changeUser(id: UUID, dto: ChangeUserInput!): User
     changePost(id: UUID, dto: ChangePostInput!): Post
     changeProfile(id: UUID, dto: ChangeProfileInput!): Profile
+
+    subscribeTo(userId: UUID, authorId: UUID): ObjID
+    unsubscribeFrom(userId: UUID, authorId: UUID): Boolean
   }
 
   input CreateUserInput {
@@ -330,7 +323,9 @@ const schema = buildSchema(`
     isMale: Boolean
   }
 
+  type ObjID {
+    id: UUID
+  }
 `);
 
-//createProfile(dto: CreateProfileInput!): ObjID
-//createPost(dto: CreatePostInput!): ObjID
+export default plugin;
