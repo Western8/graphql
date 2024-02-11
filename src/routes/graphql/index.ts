@@ -90,6 +90,63 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
         return null;
       }
     },
+
+    createUser: async (args) => {
+      const user = await prisma.user.create({
+        data: args.dto
+      });
+      return user;
+    },
+
+    createPost: async (args) => {
+      const post = await prisma.post.create({
+        data: args.dto
+      });
+      return post;
+    },
+
+    createProfile: async (args) => {
+      const profile = await prisma.profile.create({
+        data: args.dto
+      });
+      return profile;
+    },
+
+    deletePost: async (args) => {
+      await prisma.post.delete({ where: { id: args.id } });
+      return true;
+    },
+    deleteProfile: async (args) => {
+      await prisma.profile.delete({ where: { id: args.id } });
+      return true;
+    },
+    deleteUser: async (args) => {
+      await prisma.user.delete({ where: { id: args.id } });
+      return true;
+    },
+
+    changeUser: async (args) => {
+      const user = await prisma.user.update({
+        where: { id: args.id },
+        data: args.dto,
+      });
+      return user;
+    },
+    changePost: async (args) => {
+      const post = await prisma.post.update({
+        where: { id: args.id },
+        data: args.dto,
+      });
+      return post;
+    },
+    changeProfile: async (args) => {
+      const profile = await prisma.profile.update({
+        where: { id: args.id },
+        data: args.dto,
+      });
+      return profile;
+    },
+
   }
 
   const getUserData = async (user) => {
@@ -228,4 +285,52 @@ const schema = buildSchema(`
   }
 
   scalar UUID
+
+  type Mutation  {
+    createUser(dto: CreateUserInput!): User
+    createPost(dto: CreatePostInput!): Post
+    createProfile(dto: CreateProfileInput!): Profile
+
+    deletePost(id: UUID): Boolean
+    deleteProfile(id: UUID): Boolean
+    deleteUser(id: UUID): Boolean
+
+    changeUser(id: UUID, dto: ChangeUserInput!): User
+    changePost(id: UUID, dto: ChangePostInput!): Post
+    changeProfile(id: UUID, dto: ChangeProfileInput!): Profile
+  }
+
+  input CreateUserInput {
+    name: String
+    balance: Float
+  }
+
+  input CreatePostInput {
+    authorId: UUID
+    content: String
+    title: String
+  }
+
+  input CreateProfileInput {
+    userId: UUID
+    memberTypeId: MemberTypeId
+    isMale: Boolean
+    yearOfBirth: Int
+  }
+
+  input ChangeUserInput {
+    name: String
+  }
+
+  input ChangePostInput {
+    title: String
+  }
+
+  input ChangeProfileInput {
+    isMale: Boolean
+  }
+
 `);
+
+//createProfile(dto: CreateProfileInput!): ObjID
+//createPost(dto: CreatePostInput!): ObjID
