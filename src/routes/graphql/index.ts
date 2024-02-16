@@ -3,6 +3,7 @@ import { createGqlResponseSchema, gqlResponseSchema, gqlSchema } from './schemas
 import { graphql, parse, validate } from 'graphql';
 import depthLimit from 'graphql-depth-limit';
 import DataLoader from 'dataloader';
+import { IUserAll, TMemberType } from './types/types.js';
 
 const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
   const { prisma } = fastify;
@@ -17,9 +18,10 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
       },
     },
     async handler(req) {
-      //console.log('зашли в handler graphql !!!!!!!')
       const errors = validate(gqlSchema, parse(req.body.query), [depthLimit(5)]);
       if (errors.length) return { errors };
+
+      const resolvers = getResolvers(req.body.query);
 
       const result = graphql({
         schema: gqlSchema,
@@ -32,9 +34,6 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
       return result;
     },
   });
-
-  type TUsers = { id: string; name: string; balance: number; }
-  //const loaders: DataLoader<unknown, TUsers[]>[] = [];
 
   const loaderUsers = new DataLoader(async (ids: readonly string[]) => {
     const users = await prisma.user.findMany({
@@ -76,11 +75,6 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
     return memberTypesSorted;
   });
 
-  interface Sub {
-    subscriberId: string | undefined;
-    authorId: string | undefined;
-  };
-
   const loaderSubsAll = new DataLoader(async (ids: readonly number[]) => {
     const subscribersOnAuthors = await prisma.subscribersOnAuthors.findMany();
     const subscribersOnAuthorsSorted = ids.map(id => subscribersOnAuthors);
@@ -88,284 +82,198 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
   });
 
   const loaderUsersAll = new DataLoader(async (ids: readonly number[]) => {
-    const users = await prisma.user.findMany();
+    const users = await prisma.user.findMany({
+      include: {
+        posts: true,
+        profile: {
+          include: {
+            memberType: true,
+          }
+        },
+        userSubscribedTo: true,
+        subscribedToUser: true,
+      }
+    });
+
     const usersSorted = ids.map(id => users);
     return usersSorted;
   });
 
-  /*
-  const loaderSubs = new DataLoader(async (ids: readonly Sub[]) => {
-    //const idsSubscriber = ids.map(item => item.subscriberId);
-    //const idsAuthor = ids.map(item => item.authorId);
-    const subscribersOnAuthors = await prisma.subscribersOnAuthors.findMany();
-    /*
-    const subscribersOnAuthors = await prisma.subscribersOnAuthors.findMany({
-      where: {
-        OR: [
-          { subscriberId: { in: idsSubscriber as string[] } },
-          { authorId: { in: idsAuthor as string[] } },
-        ]
-      }
-    });
-    */
-    //const subscribersOnAuthorsSorted = ids.map(id => subscribersOnAuthors);
-    /*
-     const subscribersOnAuthorsSorted = ids.map(id => subscribersOnAuthors.filter(item => {
-       if (id.subscriberId) return item.subscriberId === id.subscriberId;
-       if (id.authorId) return item.authorId === id.authorId;
-       return true;
-     }));
-     */
-   // return subscribersOnAuthorsSorted;
-  //});
-  /*
-    const loaderSubsTo = new DataLoader(async (ids: readonly string[]) => {
-      const subscribersOnAuthors = await prisma.subscribersOnAuthors.findMany({
-        where: {
-          subscriberId: { in: ids as string[] }
+  function getResolvers(query) {
+    const resolvers = {
+      memberTypes: async () => await prisma.memberType.findMany(),
+      posts: async () => await prisma.post.findMany(),
+      users: async () => {
+        const hasSubscribedToUser = query.includes('subscribedToUser');
+        const hasPostProfile = query.includes('post') || query.includes('profile');
+        const params = {
+          include: {
+            posts: true,
+            profile: {
+              include: {
+                memberType: true,
+              }
+            },
+            userSubscribedTo: true,
+            subscribedToUser: hasSubscribedToUser,
+          }
+        };
+        const users = await prisma.user.findMany(params);
+
+        return users.map(async (item, __, users) => await getUserData(item, users, hasPostProfile));
+      },
+      profiles: async () => {
+        const profiles = await prisma.profile.findMany();
+        return profiles.map(async (item) => await getProfileData(item));
+      },
+
+      memberType: async (args) => {
+        const result = await prisma.memberType.findUnique({ where: { id: args.id } })
+        return result || null
+      },
+      post: async (args) => {
+        const result = await prisma.post.findUnique({ where: { id: args.id } })
+        return result || null
+      },
+      user: async (args) => {
+        const user = (await loaderUsers.load(args.id))[0];
+        if (user) {
+          return await getUserData(user);
+        } else {
+          return null;
         }
-      });
-      const subscribersOnAuthorsSorted = ids.map(id => subscribersOnAuthors.filter(item => item.subscriberId === id));
-      return subscribersOnAuthorsSorted;
-    });
-  
-    const loaderSubsBack = new DataLoader(async (ids: readonly string[]) => {
-      const subscribersOnAuthors = await prisma.subscribersOnAuthors.findMany({
-        where: {
-          authorId: { in: ids as string[] }
+      },
+      profile: async (args) => {
+        const profile = await prisma.profile.findUnique({ where: { id: args.id } })
+        if (profile) {
+          return await getProfileData(profile);
+        } else {
+          return null;
         }
-      });
-      const subscribersOnAuthorsSorted = ids.map(id => subscribersOnAuthors.filter(item => item.authorId === id));
-      return subscribersOnAuthorsSorted;
-    });
-  */
-  const resolvers = {
-    memberTypes: async () => await prisma.memberType.findMany(),
-    posts: async () => await prisma.post.findMany(),
-    users: async () => {
-      const users = await prisma.user.findMany();
-      //const users = loaderUsers.loadMany();
-      //return users.map(async (item) => await getUserData(item));
-      /*
-      if (!loaders[0]) {
-        console.log('Зашли в loader!!!!!!!!!! ');
-        const loader = new DataLoader(async ([k]) => {
-          return [await prisma.user.findMany()];
+      },
+
+      createUser: async (args) => {
+        const user = await prisma.user.create({
+          data: args.dto
         });
-        loaders.push(loader);
-        //loaders.loader = loader;
-      }
+        return user;
+      },
+      createPost: async (args) => {
+        const post = await prisma.post.create({
+          data: args.dto
+        });
+        return post;
+      },
+      createProfile: async (args) => {
+        const profile = await prisma.profile.create({
+          data: args.dto
+        });
+        return profile;
+      },
 
-      const users = await loaders[0].load(k);
-      */
-      return users.map(async (item, __, users) => await getUserData(item, users));
-      //return users.map((item) => getUserData(item));
-      //setTimeout(() => {}, 0);
-    },
-    profiles: async () => {
-      const profiles = await prisma.profile.findMany();
-      return profiles.map(async (item) => await getProfileData(item));
-    },
+      deletePost: async (args) => {
+        await prisma.post.delete({ where: { id: args.id } });
+        return true;
+      },
+      deleteProfile: async (args) => {
+        await prisma.profile.delete({ where: { id: args.id } });
+        return true;
+      },
+      deleteUser: async (args) => {
+        await prisma.user.delete({ where: { id: args.id } });
+        return true;
+      },
 
-    memberType: async (args) => {
-      const result = await prisma.memberType.findUnique({ where: { id: args.id } })
-      return result || null
-    },
-    post: async (args) => {
-      const result = await prisma.post.findUnique({ where: { id: args.id } })
-      return result || null
-    },
-    user: async (args) => {
-      //const user = await prisma.user.findUnique({ where: { id: args.id } })
-      const user = (await loaderUsers.load(args.id))[0];
-      if (user) {
-        return await getUserData(user);
-        //return await getUserData(user, loaderPosts);
-      } else {
-        return null;
-      }
-    },
-    profile: async (args) => {
-      const profile = await prisma.profile.findUnique({ where: { id: args.id } })
-      if (profile) {
-        return await getProfileData(profile);
-      } else {
-        return null;
-      }
-    },
+      changeUser: async (args) => {
+        const user = await prisma.user.update({
+          where: { id: args.id },
+          data: args.dto,
+        });
+        return user;
+      },
+      changePost: async (args) => {
+        const post = await prisma.post.update({
+          where: { id: args.id },
+          data: args.dto,
+        });
+        return post;
+      },
+      changeProfile: async (args) => {
+        const profile = await prisma.profile.update({
+          where: { id: args.id },
+          data: args.dto,
+        });
+        return profile;
+      },
 
-    createUser: async (args) => {
-      const user = await prisma.user.create({
-        data: args.dto
-      });
-      return user;
-    },
-    createPost: async (args) => {
-      const post = await prisma.post.create({
-        data: args.dto
-      });
-      return post;
-    },
-    createProfile: async (args) => {
-      const profile = await prisma.profile.create({
-        data: args.dto
-      });
-      return profile;
-    },
-
-    deletePost: async (args) => {
-      await prisma.post.delete({ where: { id: args.id } });
-      return true;
-    },
-    deleteProfile: async (args) => {
-      await prisma.profile.delete({ where: { id: args.id } });
-      return true;
-    },
-    deleteUser: async (args) => {
-      await prisma.user.delete({ where: { id: args.id } });
-      return true;
-    },
-
-    changeUser: async (args) => {
-      const user = await prisma.user.update({
-        where: { id: args.id },
-        data: args.dto,
-      });
-      return user;
-    },
-    changePost: async (args) => {
-      const post = await prisma.post.update({
-        where: { id: args.id },
-        data: args.dto,
-      });
-      return post;
-    },
-    changeProfile: async (args) => {
-      const profile = await prisma.profile.update({
-        where: { id: args.id },
-        data: args.dto,
-      });
-      return profile;
-    },
-
-    subscribeTo: async (args) => {
-      const sub = await prisma.subscribersOnAuthors.create({
-        data: {
-          subscriberId: args.userId,
-          authorId: args.authorId,
-        }
-      });
-      return { id: args.authorId };
-    },
-    unsubscribeFrom: async (args) => {
-      await prisma.subscribersOnAuthors.deleteMany({
-        where: {
-          subscriberId: args.userId,
-          authorId: args.authorId,
-        }
-      });
-      return true;
-    },
+      subscribeTo: async (args) => {
+        const sub = await prisma.subscribersOnAuthors.create({
+          data: {
+            subscriberId: args.userId,
+            authorId: args.authorId,
+          }
+        });
+        return { id: args.authorId };
+      },
+      unsubscribeFrom: async (args) => {
+        await prisma.subscribersOnAuthors.deleteMany({
+          where: {
+            subscriberId: args.userId,
+            authorId: args.authorId,
+          }
+        });
+        return true;
+      },
+    }
+    return resolvers;
   }
 
   let counter = 0;
-  const getUserData = async (user, users: TUsers[] = []) => {
-    const posts = await loaderPosts.load(user.id);
-    //const profile = await prisma.profile.findUnique({ where: { userId: user.id } });
-    const profiles = await loaderProfiles.load(user.id);
-    const profile = profiles[0];
-    const profileData = await getProfileData(profile);
-
+  const getUserData = async (user, users: IUserAll[] = [], hasPostProfile = false) => {
+    counter++;
     let usersAll = users;
+    let subsAll;
     if (!users.length) {
       usersAll = await loaderUsersAll.load(counter);
+      subsAll = await loaderSubsAll.load(counter);
     }
-    counter++;
-    const subsAll = await loaderSubsAll.load(counter);
-    //const subsAll = await loaderSubsAll.load(user.id);
+    const userPrime = usersAll.find(item => item.id === user.id);
 
-
-    const subs = await subsAll.filter(item => item.subscriberId === user.id );
-    //console.log('1111111111 subsAll ', subsAll);
-    //console.log('1111111111 subs ', subs);
-    
-    const userSubscribedTo = subs.map(async (item) => {
-      //const subTo = await prisma.user.findUnique({ where: { id: item.authorId } });
-      //const subTo = (await loaderUsers.load(item.authorId))[0];
-      const subTo = usersAll.find(itemUsersAll => itemUsersAll.id === item.authorId );;
-      if (!subTo) throw new Error('A нету юзера!!!!!!!!!!!!!!!!!');// return {};
-      //const subsBack = await prisma.subscribersOnAuthors.findMany({ where: { authorId: subTo.id } });
-      //const subsBack = await loaderSubsBack.load(subTo.id);
-      const subsBack = subsAll.filter(item => item.authorId === subTo.id );
-      const subscribedToUser = subsBack.map(itemSubBack => { return { id: itemSubBack.subscriberId } });
-      return {
-        id: subTo.id,
-        name: subTo.name,
-        subscribedToUser,
+    const userSubscribedTo = userPrime?.userSubscribedTo?.map(item => {
+      const subTo = usersAll.find(itemUsersAll => itemUsersAll.id === item.authorId);
+      let subscribedToUser = subTo?.subscribedToUser;
+      if (!users.length) {
+        const subsBack = subsAll.filter(item => item.authorId === subTo?.id);
+        subscribedToUser = subsBack.map(itemSubBack => { return { id: itemSubBack.subscriberId } });
       }
-    });
-
-
-    const subsBack = await  subsAll.filter(item => item.authorId === user.id );
-    const subscribedToUser = subsBack.map(async (item) => {
-      //const subBack = await prisma.user.findUnique({ where: { id: item.subscriberId } });
-      //const subBack = (await loaderUsers.load(item.subscriberId))[0];
-      const subBack = usersAll.find(itemUsersAll => itemUsersAll.id === item.subscriberId );;
-      if (!subBack) throw new Error('A нету юзера!!!!!!!!!!!!!!!!!');
-      //if (!subBack) return {};
-      //const subsTo = await prisma.subscribersOnAuthors.findMany({ where: { subscriberId: subBack.id } })
-      //const subsTo = await loaderSubsTo.load(subBack.id);
-      const subsTo = subsAll.filter(item => item.subscriberId === subBack.id );
-      const userSubscribedTo = subsTo.map(itemSubTo => { return { id: itemSubTo.authorId } });
       return {
-        id: subBack.id,
-        name: subBack.name,
-        userSubscribedTo,
+        id: item.authorId,
+        name: subTo?.name,//item.author.name,
+        subscribedToUser: subscribedToUser,
       }
-    })
-
-
-    //loaderSubs.load({ subscriberId: user.id, authorId: undefined });
-    //loaderSubs.load({ subscriberId: undefined, authorId: user.id });
-
-    //const subs = await prisma.subscribersOnAuthors.findMany({ where: { subscriberId: user.id } })
-    //const subs = await loaderSubsTo.load(user.id);
-    /*
-    const subs =  await    loaderSubs.load({ subscriberId: user.id, authorId: undefined });
-    const userSubscribedTo = subs.map(async (item) => {
-      //const subTo = await prisma.user.findUnique({ where: { id: item.authorId } });
-      const subTo = (await loaderUsers.load(item.authorId))[0];
-      if (!subTo) return {};
-      //const subsBack = await prisma.subscribersOnAuthors.findMany({ where: { authorId: subTo.id } });
-      //const subsBack = await loaderSubsBack.load(subTo.id);
-      const subsBack =  await   loaderSubs.load({ subscriberId: undefined, authorId: subTo.id });
-      const subscribedToUser = subsBack.map(itemSubBack => { return { id: itemSubBack.subscriberId } });
+    }) || [];
+    const subscribedToUser = userPrime?.subscribedToUser?.map(item => {
+      const subBack = usersAll.find(itemUsersAll => itemUsersAll.id === item.subscriberId);
+      let userSubscribedTo = subBack?.userSubscribedTo;
+      if (!users.length) {
+        const subsTo = subsAll.filter(item => item.subscriberId === subBack?.id);
+        userSubscribedTo = subsTo.map(itemSubTo => { return { id: itemSubTo.authorId } });
+      }
       return {
-        id: subTo.id,
-        name: subTo.name,
-        subscribedToUser,
+        id: item.subscriberId,
+        name: subBack?.name,//item.subscriber.name,
+        userSubscribedTo: userSubscribedTo,
       }
-    })
-    */
-    //const subsBack = await prisma.subscribersOnAuthors.findMany({ where: { authorId: user.id } });
-    //const subsBack = await loaderSubsBack.load(user.id);
-    /*
-    const subsBack =    await  loaderSubs.load({ subscriberId: undefined, authorId: user.id });
-     const subscribedToUser = subsBack.map(async (item) => {
-       //const subBack = await prisma.user.findUnique({ where: { id: item.subscriberId } });
-       const subBack = (await loaderUsers.load(item.subscriberId))[0];
-       if (!subBack) return {};
-       //const subsTo = await prisma.subscribersOnAuthors.findMany({ where: { subscriberId: subBack.id } })
-       //const subsTo = await loaderSubsTo.load(subBack.id);
-       const subsTo =    await   loaderSubs.load({ subscriberId: subBack.id, authorId: undefined });
-       const userSubscribedTo = subsTo.map(itemSubTo => { return { id: itemSubTo.authorId } });
-       return {
-         id: subBack.id,
-         name: subBack.name,
-         userSubscribedTo,
-       }
-     })
-     */
+    }) || [];
+
+    let posts = userPrime?.posts;
+    let profile = userPrime?.profile;
+    if (hasPostProfile) {
+      posts = await loaderPosts.load(user.id);
+      const profiles = await loaderProfiles.load(user.id);
+      profile = profiles[0];
+    }
+    const profileData = await getProfileData(profile, profile?.memberType);
 
     return {
       id: user.id,
@@ -378,54 +286,11 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
     }
   }
 
-  /*
-  const getUserData = async (user) => {
-    //const posts = await prisma.post.findMany({ where: { authorId: user.id } });
-    const posts = await loaderPosts.load(user.id);
-    const profile = await prisma.profile.findUnique({ where: { userId: user.id } });
-    const profileData = await getProfileData(profile);
-
-    const subs = await prisma.subscribersOnAuthors.findMany({ where: { subscriberId: user.id } })
-    const userSubscribedTo = subs.map(async (item) => {
-      const subTo = await prisma.user.findUnique({ where: { id: item.authorId } });
-      if (!subTo) return {};
-      const subsBack = await prisma.subscribersOnAuthors.findMany({ where: { authorId: subTo.id } })
-      const subscribedToUser = subsBack.map(itemSubBack => { return { id: itemSubBack.subscriberId } });
-      return {
-        id: subTo.id,
-        name: subTo.name,
-        subscribedToUser,
-      }
-    })
-
-    const subsBack = await prisma.subscribersOnAuthors.findMany({ where: { authorId: user.id } })
-    const subscribedToUser = subsBack.map(async (item) => {
-      const subBack = await prisma.user.findUnique({ where: { id: item.subscriberId } });
-      if (!subBack) return {};
-      const subsTo = await prisma.subscribersOnAuthors.findMany({ where: { subscriberId: subBack.id } })
-      const userSubscribedTo = subsTo.map(itemSubTo => { return { id: itemSubTo.authorId } });
-      return {
-        id: subBack.id,
-        name: subBack.name,
-        userSubscribedTo,
-      }
-    })
-
-    return {
-      id: user.id,
-      name: user.name,
-      balance: user.balance,
-      profile: profileData,
-      posts,
-      userSubscribedTo: userSubscribedTo,
-      subscribedToUser: subscribedToUser,
-    }
-  }
-*/
-  const getProfileData = async (profile) => {
+  const getProfileData = async (profile, memberType: TMemberType | null = null) => {
     if (profile) {
-      //const memberType = await prisma.memberType.findUnique({ where: { id: profile.memberTypeId } })
-      const memberType = (await loaderMemberTypes.load(profile.memberTypeId))[0];
+      if (memberType === null) {
+        memberType = (await loaderMemberTypes.load(profile.memberTypeId))[0];
+      }
       return {
         id: profile.id,
         isMale: profile.isMale,
@@ -436,12 +301,7 @@ const plugin: FastifyPluginAsyncTypebox = async (fastify) => {
       return null;
     }
   }
-
-  //const UUID = UUIDType;
-  //const typeResolvers = {
-  //  UUID: UUIDType,
-  //}
-
+  
 };
 
 export default plugin;
